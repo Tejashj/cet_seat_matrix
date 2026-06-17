@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { parseKCETExcel, ImportResult, RawAllotmentRecord } from '@/lib/data/excelImport';
-import { saveAllotmentData, getDataSummary, deleteImport, getImportHistory } from '@/lib/data/indexedDB';
+import { parseKCETExcel, ImportResult } from '@/lib/data/excelImport';
 import { Round, ROUND_LABELS } from '@/lib/data/roundFactors';
 import {
   UploadCloud, AlertCircle, CheckCircle2, Trash2, Database,
-  FileSpreadsheet, FileWarning, ArrowRight, Loader2, Sparkles
+  FileSpreadsheet, FileWarning, ArrowRight, Loader2, Sparkles,
+  Cpu, Activity
 } from 'lucide-react';
 
 export default function DataImportWizard() {
@@ -17,25 +17,25 @@ export default function DataImportWizard() {
   const [error, setError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
-  // Db state
-  const [summary, setSummary] = useState<{
-    totalRecords: number;
-    years: number[];
-    rounds: Round[];
-    imports: any[];
-  } | null>(null);
+  // Server-side database state
+  const [serverDatasets, setServerDatasets] = useState<any[]>([]);
+  const [training, setTraining] = useState<boolean>(false);
+  const [trainStatus, setTrainStatus] = useState<string | null>(null);
 
-  const refreshSummary = async () => {
+  const loadServerDatasets = async () => {
     try {
-      const data = await getDataSummary();
-      setSummary(data);
+      const res = await fetch('/api/datasets');
+      if (res.ok) {
+        const data = await res.json();
+        setServerDatasets(data);
+      }
     } catch (err) {
-      console.error('Failed to load summary:', err);
+      console.error('Failed to load server datasets:', err);
     }
   };
 
   useEffect(() => {
-    refreshSummary();
+    loadServerDatasets();
   }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -68,32 +68,78 @@ export default function DataImportWizard() {
   };
 
   const handleSave = async () => {
-    if (!importResult) return;
+    if (!file) return;
     setLoading(true);
+    setError(null);
     try {
-      await saveAllotmentData(importResult.records, year, round, file?.name || 'Uploaded File');
-      await refreshSummary();
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('year', String(year));
+      formData.append('round', round);
+      formData.append('fileName', file.name);
+
+      const res = await fetch('/api/datasets', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to save dataset on server.');
+      }
+
+      await loadServerDatasets();
       setImportResult(null);
       setFile(null);
-      alert('Data successfully imported to browser IndexedDB!');
+      alert('Data successfully uploaded and registered on the server!');
     } catch (err: any) {
-      setError(err.message || 'Failed to save data.');
+      setError(err.message || 'Failed to upload data.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (y: number, r: Round) => {
-    if (!confirm(`Are you sure you want to delete all imported data for ${y} ${ROUND_LABELS[r]}?`)) {
+  const handleDelete = async (id: string) => {
+    if (!confirm(`Are you sure you want to delete this dataset? This will remove all associated cutoffs from the server.`)) {
       return;
     }
+    setLoading(true);
     try {
-      await deleteImport(y, r);
-      await refreshSummary();
+      const res = await fetch(`/api/datasets?id=${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to delete dataset.');
+      }
+      await loadServerDatasets();
     } catch (err: any) {
-      alert('Failed to delete import: ' + err.message);
+      alert('Error deleting dataset: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleTrain = async () => {
+    setTraining(true);
+    setTrainStatus('Analyzing historical trends...');
+    try {
+      const res = await fetch('/api/datasets/train', {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Training failed.');
+      }
+      setTrainStatus(`Successfully trained prediction model with ${data.totalOptions.toLocaleString()} cutoffs across ${data.totalDatasets} datasets!`);
+    } catch (err: any) {
+      setTrainStatus(`Training Error: ${err.message}`);
+    } finally {
+      setTraining(false);
+    }
+  };
+
+  const totalServerRecords = serverDatasets.reduce((sum, d) => sum + (d.rowCount || 0), 0);
 
   return (
     <div style={{ maxWidth: 880, margin: '0 auto' }} className="animate-fade-in">
@@ -106,7 +152,7 @@ export default function DataImportWizard() {
               <Database size={20} className="text-gradient" /> Ingest Real KEA Allotment Data
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
-              Upload official KCET cut-off Excel files. The parser automatically detects categories, college codes, branch codes, and cutoff ranks. Data stays inside your browser.
+              Upload official KCET cut-off Excel files. The parser automatically detects categories, college codes, branch codes, and cutoff ranks. Data is stored on the backend.
             </p>
 
             {/* Select options */}
@@ -228,7 +274,7 @@ export default function DataImportWizard() {
                     Cancel
                   </button>
                   <button className="btn btn-primary btn-sm" style={{ flex: 1, justifyContent: 'center', gap: '0.35rem' }} onClick={handleSave} disabled={loading}>
-                    {loading ? <Loader2 className="spinner" size={14} /> : <>Save to Database <ArrowRight size={14} /></>}
+                    {loading ? <Loader2 className="spinner" size={14} /> : <>Save to Backend <ArrowRight size={14} /></>}
                   </button>
                 </div>
               </div>
@@ -238,9 +284,10 @@ export default function DataImportWizard() {
 
         {/* Right: Database Stats and Import History */}
         <div>
+          {/* Database Summary */}
           <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <FileSpreadsheet size={18} style={{ color: 'var(--color-brand-500)' }} /> Database Summary
+              <FileSpreadsheet size={18} style={{ color: 'var(--color-brand-500)' }} /> Backend Database Summary
             </h3>
             
             <div style={{
@@ -249,20 +296,20 @@ export default function DataImportWizard() {
               marginBottom: '1rem',
             }}>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Total Real Records Stored
+                Total Backend Records
               </div>
               <div style={{ fontSize: '2rem', fontWeight: 900, fontFamily: "'Space Grotesk', sans-serif", color: 'var(--text-primary)', marginTop: '0.2rem' }}>
-                {summary ? summary.totalRecords.toLocaleString() : '0'}
+                {totalServerRecords.toLocaleString()}
               </div>
             </div>
 
-            {summary && summary.imports.length > 0 && (
+            {serverDatasets.length > 0 && (
               <div>
                 <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-                  Imported Datasets
+                  Registered Datasets
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 240, overflowY: 'auto' }}>
-                  {summary.imports.map(imp => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 200, overflowY: 'auto', marginBottom: '1rem' }}>
+                  {serverDatasets.map(imp => (
                     <div key={imp.id} style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '0.625rem 0.75rem', background: 'var(--surface-2)',
@@ -273,14 +320,15 @@ export default function DataImportWizard() {
                           {imp.academicYear} — {ROUND_LABELS[imp.round as Round] || imp.round}
                         </span>
                         <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {imp.fileName} • {imp.rowCount} rows
+                          {imp.fileName} • {imp.rowCount.toLocaleString()} rows
                         </span>
                       </div>
                       <button
                         className="btn btn-icon btn-ghost btn-sm"
                         style={{ color: '#ef4444' }}
-                        onClick={() => handleDelete(imp.academicYear, imp.round as Round)}
-                        title="Delete this dataset"
+                        onClick={() => handleDelete(imp.id)}
+                        disabled={loading}
+                        title="Delete dataset"
                       >
                         <Trash2 size={13} />
                       </button>
@@ -290,13 +338,48 @@ export default function DataImportWizard() {
               </div>
             )}
 
-            {(!summary || summary.imports.length === 0) && (
+            {serverDatasets.length === 0 && (
               <div style={{
                 textAlign: 'center', padding: '2rem 1rem', border: '1px dashed var(--surface-border)',
                 borderRadius: 'var(--radius-md)', color: 'var(--text-muted)', fontSize: '0.8rem',
+                marginBottom: '1rem',
               }}>
                 <FileWarning size={28} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block', margin: '0 auto 0.5rem' }} />
                 No uploaded datasets. The engine is currently using synthetic baseline data.
+              </div>
+            )}
+          </div>
+
+          {/* Model Training panel */}
+          <div className="card animate-fade-in" style={{ padding: '1.5rem', border: '1.5px solid var(--color-brand-100)', background: 'var(--surface-1)' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Cpu size={18} style={{ color: 'var(--color-brand-500)' }} /> AI Prediction Modeler
+            </h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.5, marginBottom: '1rem' }}>
+              Run the training engine on all uploaded datasets. It aggregates cutoffs, fits historical trendlines, and updates the active prediction database.
+            </p>
+
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%', justifyContent: 'center', gap: '0.5rem' }}
+              onClick={handleTrain}
+              disabled={serverDatasets.length === 0 || training}
+            >
+              {training ? <Loader2 className="spinner" size={16} /> : <Activity size={16} />}
+              Train Prediction Model
+            </button>
+
+            {trainStatus && (
+              <div style={{
+                marginTop: '1rem', padding: '0.75rem',
+                background: trainStatus.includes('Error') ? '#fef2f2' : 'rgba(16,185,129,0.06)',
+                border: `1px solid ${trainStatus.includes('Error') ? '#fecaca' : 'rgba(16,185,129,0.2)'}`,
+                borderRadius: 'var(--radius-md)',
+                color: trainStatus.includes('Error') ? '#dc2626' : '#059669',
+                fontSize: '0.78rem',
+                lineHeight: 1.5,
+              }}>
+                {trainStatus}
               </div>
             )}
           </div>

@@ -186,105 +186,213 @@ function determineTier(studentRank: number, predictedCutoff: number): Tier {
  * Main prediction function
  */
 export function predict(input: StudentInput): PredictionResult {
-  const stats = getYearlyStats();
   const recommendations: Recommendation[] = [];
+  const selectedRound = input.round || 'R1';
 
-  // Filter to 2025 data for the student's category
-  const relevantStats2025 = stats.filter(
-    s => s.academicYear === 2025 && s.category === input.category
-  );
-
-  // Build a set of unique college+branch combos
-  const seenCombos = new Set<string>();
-
-  for (const stat of relevantStats2025) {
-    const comboKey = `${stat.collegeCode}__${stat.branchCode}`;
-    if (seenCombos.has(comboKey)) continue;
-    seenCombos.add(comboKey);
-
-    const college = COLLEGES.find(c => c.code === stat.collegeCode);
-    const branch = BRANCHES.find(b => b.code === stat.branchCode);
-    if (!college || !branch) continue;
-
-    // Apply user filters
-    if (input.preferredCities && input.preferredCities.length > 0) {
-      if (!input.preferredCities.includes(college.city)) continue;
-    }
-    if (input.preferredColleges && input.preferredColleges.length > 0) {
-      if (!input.preferredColleges.includes(college.code)) continue;
-    }
-    if (input.preferredBranches && input.preferredBranches.length > 0) {
-      if (!input.preferredBranches.includes(branch.code)) continue;
-    }
-    if (input.excludeColleges && input.excludeColleges.includes(college.code)) continue;
-    if (!input.includePrivate && college.type === 'Unaided') continue;
-    if (!input.includeGovernment && college.type === 'Government') continue;
-    if (!input.includeAided && college.type === 'Aided') continue;
-
-    // Get historical data
-    let historicalCutoffs = getHistoricalCutoffs(stat.collegeCode, stat.branchCode, input.category);
-    if (input.customHistory) {
-      const customMatches = input.customHistory.filter(
-        h => h.collegeCode === stat.collegeCode && h.branchCode === stat.branchCode && h.category === input.category
-      );
-      if (customMatches.length > 0) {
-        const customByYear = new Map(customMatches.map(m => [m.year, m.cutoff]));
-        historicalCutoffs = historicalCutoffs.map(h => ({
-          year: h.year,
-          cutoff: customByYear.get(h.year) ?? h.cutoff
-        }));
-        for (const m of customMatches) {
-          if (!historicalCutoffs.some(h => h.year === m.year)) {
-            historicalCutoffs.push({ year: m.year, cutoff: m.cutoff });
-          }
-        }
-        historicalCutoffs.sort((a, b) => a.year - b.year);
+  // Try to load server-side trained model
+  let trainedModel: any = null;
+  if (typeof window === 'undefined') {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const modelPath = path.join(process.cwd(), 'data', 'trained-model.json');
+      if (fs.existsSync(modelPath)) {
+        const fileContent = fs.readFileSync(modelPath, 'utf8');
+        trainedModel = JSON.parse(fileContent);
       }
+    } catch (err) {
+      console.warn('Failed to load server-side trained model:', err);
     }
+  }
 
-    if (historicalCutoffs.length === 0) continue;
+  if (trainedModel) {
+    const roundFactors = trainedModel.roundFactors || { MOCK: 0.91, R1: 1.00, R2: 1.13, R2E: 1.22 };
+    const factor = roundFactors[selectedRound] || 1.0;
 
-    // Calculate weighted predicted cutoff
-    const basePredictedCutoff = calculateWeightedCutoff(historicalCutoffs);
-    if (basePredictedCutoff === 0) continue;
+    for (const [key, trainedOpt] of Object.entries(trainedModel.options)) {
+      const option = trainedOpt as any;
+      if (option.category !== input.category) continue;
 
-    // Adjust for round factor
-    const selectedRound = input.round || 'R1';
-    const factor = getRoundFactor(selectedRound, branch.code);
-    const predictedCutoff = Math.round(basePredictedCutoff * factor);
+      const college = COLLEGES.find(c => c.code === option.collegeCode);
+      const branch = BRANCHES.find(b => b.code === option.branchCode);
+      if (!college || !branch) continue;
 
-    // Calculate metrics
-    const confidence = calculateConfidence(historicalCutoffs);
-    const trend = calculateTrend(historicalCutoffs);
-    const tier = determineTier(input.rank, predictedCutoff);
-    const probability = calculateProbability(input.rank, predictedCutoff, confidence);
-    const safetyMargin = predictedCutoff - input.rank;
+      // Apply user filters
+      if (input.preferredCities && input.preferredCities.length > 0) {
+        if (!input.preferredCities.includes(college.city)) continue;
+      }
+      if (input.preferredColleges && input.preferredColleges.length > 0) {
+        if (!input.preferredColleges.includes(college.code)) continue;
+      }
+      if (input.preferredBranches && input.preferredBranches.length > 0) {
+        if (!input.preferredBranches.includes(branch.code)) continue;
+      }
+      if (input.excludeColleges && input.excludeColleges.includes(college.code)) continue;
+      if (!input.includePrivate && college.type === 'Unaided') continue;
+      if (!input.includeGovernment && college.type === 'Government') continue;
+      if (!input.includeAided && college.type === 'Aided') continue;
 
-    recommendations.push({
-      id: `${stat.collegeCode}_${stat.branchCode}`,
-      priority: 0, // Will be set after sorting
-      collegeCode: stat.collegeCode,
-      collegeName: college.name,
-      city: college.city,
-      district: college.district,
-      collegeType: college.type,
-      naac: college.naac,
-      annualFee: college.annualFee,
-      branchCode: stat.branchCode,
-      branchName: branch.name,
-      branchShortName: branch.shortName,
-      demandIndex: branch.demandIndex,
-      avgPackage: branch.avgPackage,
-      avgPlacementRate: branch.avgPlacementRate,
-      tier,
-      predictedCutoff,
-      confidenceScore: confidence,
-      trendDirection: trend.direction,
-      trendPercent: trend.percent,
-      historicalCutoffs,
-      probabilityOfAdmission: probability,
-      safetyMargin,
-    });
+      // Get historical cutoffs
+      let historicalCutoffs = [...option.historicalCutoffs];
+      if (input.customHistory) {
+        const customMatches = input.customHistory.filter(
+          h => h.collegeCode === option.collegeCode && h.branchCode === option.branchCode && h.category === input.category
+        );
+        if (customMatches.length > 0) {
+          const customByYear = new Map(customMatches.map(m => [m.year, m.cutoff]));
+          historicalCutoffs = historicalCutoffs.map(h => ({
+            year: h.year,
+            cutoff: customByYear.get(h.year) ?? h.cutoff
+          }));
+          for (const m of customMatches) {
+            if (!historicalCutoffs.some(h => h.year === m.year)) {
+              historicalCutoffs.push({ year: m.year, cutoff: m.cutoff });
+            }
+          }
+          historicalCutoffs.sort((a, b) => a.year - b.year);
+        }
+      }
+
+      // Re-calculate cutoff if custom overrides are active, else use pre-computed baseline
+      let baseCutoff = option.predictedCutoff;
+      let confidence = option.confidenceScore;
+      let trendDirection = option.trendDirection;
+      let trendPercent = option.trendPercent;
+
+      if (input.customHistory && input.customHistory.length > 0) {
+        baseCutoff = calculateWeightedCutoff(historicalCutoffs);
+        confidence = calculateConfidence(historicalCutoffs);
+        const trend = calculateTrend(historicalCutoffs);
+        trendDirection = trend.direction;
+        trendPercent = trend.percent;
+      }
+
+      if (baseCutoff === 0) continue;
+      const predictedCutoff = Math.round(baseCutoff * factor);
+
+      const tier = determineTier(input.rank, predictedCutoff);
+      const probability = calculateProbability(input.rank, predictedCutoff, confidence);
+      const safetyMargin = predictedCutoff - input.rank;
+
+      recommendations.push({
+        id: `${option.collegeCode}_${option.branchCode}`,
+        priority: 0,
+        collegeCode: option.collegeCode,
+        collegeName: college.name,
+        city: college.city,
+        district: college.district,
+        collegeType: college.type,
+        naac: college.naac,
+        annualFee: college.annualFee,
+        branchCode: option.branchCode,
+        branchName: branch.name,
+        branchShortName: branch.shortName,
+        demandIndex: branch.demandIndex,
+        avgPackage: branch.avgPackage,
+        avgPlacementRate: branch.avgPlacementRate,
+        tier,
+        predictedCutoff,
+        confidenceScore: confidence,
+        trendDirection,
+        trendPercent,
+        historicalCutoffs,
+        probabilityOfAdmission: probability,
+        safetyMargin,
+      });
+    }
+  } else {
+    // ── FALLBACK: Synthetic Generator ──
+    const stats = getYearlyStats();
+    const relevantStats2025 = stats.filter(
+      s => s.academicYear === 2025 && s.category === input.category
+    );
+
+    const seenCombos = new Set<string>();
+
+    for (const stat of relevantStats2025) {
+      const comboKey = `${stat.collegeCode}__${stat.branchCode}`;
+      if (seenCombos.has(comboKey)) continue;
+      seenCombos.add(comboKey);
+
+      const college = COLLEGES.find(c => c.code === stat.collegeCode);
+      const branch = BRANCHES.find(b => b.code === stat.branchCode);
+      if (!college || !branch) continue;
+
+      // Apply user filters
+      if (input.preferredCities && input.preferredCities.length > 0) {
+        if (!input.preferredCities.includes(college.city)) continue;
+      }
+      if (input.preferredColleges && input.preferredColleges.length > 0) {
+        if (!input.preferredColleges.includes(college.code)) continue;
+      }
+      if (input.preferredBranches && input.preferredBranches.length > 0) {
+        if (!input.preferredBranches.includes(branch.code)) continue;
+      }
+      if (input.excludeColleges && input.excludeColleges.includes(college.code)) continue;
+      if (!input.includePrivate && college.type === 'Unaided') continue;
+      if (!input.includeGovernment && college.type === 'Government') continue;
+      if (!input.includeAided && college.type === 'Aided') continue;
+
+      let historicalCutoffs = getHistoricalCutoffs(stat.collegeCode, stat.branchCode, input.category);
+      if (input.customHistory) {
+        const customMatches = input.customHistory.filter(
+          h => h.collegeCode === stat.collegeCode && h.branchCode === stat.branchCode && h.category === input.category
+        );
+        if (customMatches.length > 0) {
+          const customByYear = new Map(customMatches.map(m => [m.year, m.cutoff]));
+          historicalCutoffs = historicalCutoffs.map(h => ({
+            year: h.year,
+            cutoff: customByYear.get(h.year) ?? h.cutoff
+          }));
+          for (const m of customMatches) {
+            if (!historicalCutoffs.some(h => h.year === m.year)) {
+              historicalCutoffs.push({ year: m.year, cutoff: m.cutoff });
+            }
+          }
+          historicalCutoffs.sort((a, b) => a.year - b.year);
+        }
+      }
+
+      if (historicalCutoffs.length === 0) continue;
+
+      const basePredictedCutoff = calculateWeightedCutoff(historicalCutoffs);
+      if (basePredictedCutoff === 0) continue;
+
+      const factor = getRoundFactor(selectedRound, branch.code);
+      const predictedCutoff = Math.round(basePredictedCutoff * factor);
+
+      const confidence = calculateConfidence(historicalCutoffs);
+      const trend = calculateTrend(historicalCutoffs);
+      const tier = determineTier(input.rank, predictedCutoff);
+      const probability = calculateProbability(input.rank, predictedCutoff, confidence);
+      const safetyMargin = predictedCutoff - input.rank;
+
+      recommendations.push({
+        id: `${stat.collegeCode}_${stat.branchCode}`,
+        priority: 0,
+        collegeCode: stat.collegeCode,
+        collegeName: college.name,
+        city: college.city,
+        district: college.district,
+        collegeType: college.type,
+        naac: college.naac,
+        annualFee: college.annualFee,
+        branchCode: stat.branchCode,
+        branchName: branch.name,
+        branchShortName: branch.shortName,
+        demandIndex: branch.demandIndex,
+        avgPackage: branch.avgPackage,
+        avgPlacementRate: branch.avgPlacementRate,
+        tier,
+        predictedCutoff,
+        confidenceScore: confidence,
+        trendDirection: trend.direction,
+        trendPercent: trend.percent,
+        historicalCutoffs,
+        probabilityOfAdmission: probability,
+        safetyMargin,
+      });
+    }
   }
 
   // Sort: Realistic first (best match), then Safe, then Dream, then Reach
