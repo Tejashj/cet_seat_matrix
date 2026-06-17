@@ -1,0 +1,59 @@
+version: '3.9'
+
+services:
+  # ── Next.js Frontend ──────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://ml-api:8000
+      - NODE_ENV=production
+    depends_on:
+      - ml-api
+    restart: unless-stopped
+
+  # ── FastAPI ML Service ────────────────────────────────
+  ml-api:
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://kcet:password@postgres:5432/kcetdb
+      - REDIS_URL=redis://redis:6379
+      - MODEL_PATH=/models
+      - ENV=production
+    volumes:
+      - ./python/saved_models:/models
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # ── PostgreSQL Database ───────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kcet
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: kcetdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./python/scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  # ── Redis Cache ───────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
