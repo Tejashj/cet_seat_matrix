@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/lib/store/useAppStore';
-import { GraduationCap, Sun, Moon, Star, BookOpen, Database, Shield } from 'lucide-react';
+import { GraduationCap, Sun, Moon, Star, BookOpen, Database, Shield, FileText, MessageSquare } from 'lucide-react';
 
 export default function Navbar() {
   const { darkMode, toggleDarkMode, predictions, shortlist } = useAppStore();
@@ -66,9 +66,27 @@ export default function Navbar() {
             <Database size={15} /> <span className="hide-mobile">Import Data</span>
           </button>
 
+          {/* PDF Allotments link */}
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => router.push('/admin')}
+            onClick={() => router.push('/pdfs')}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+          >
+            <FileText size={15} /> <span className="hide-mobile">PDF Allotments</span>
+          </button>
+
+          {/* Feedback link */}
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => router.push('/feedback')}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+          >
+            <MessageSquare size={15} /> <span className="hide-mobile">Feedback</span>
+          </button>
+
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => router.push('/admin/dashboard')}
             style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}
           >
             <Shield size={15} /> <span className="hide-mobile">Admin</span>

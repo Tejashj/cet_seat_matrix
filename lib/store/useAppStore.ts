@@ -28,6 +28,12 @@ interface AppState {
   removeFromShortlist: (id: string) => void;
   reorderShortlist: (newOrder: Recommendation[]) => void;
   isShortlisted: (id: string) => boolean;
+
+  // Filters & Sorting
+  filterTier: 'all' | 'Dream' | 'Realistic' | 'Safe';
+  setFilterTier: (tier: 'all' | 'Dream' | 'Realistic' | 'Safe') => void;
+  sortBy: 'predictedCutoff' | 'collegeName' | 'confidenceScore';
+  setSortBy: (sort: 'predictedCutoff' | 'collegeName' | 'confidenceScore') => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -69,6 +75,12 @@ export const useAppStore = create<AppState>()(
         set({ shortlist: newOrder.map((r, i) => ({ ...r, priority: i + 1 })) });
       },
       isShortlisted: (id) => get().shortlist.some(r => r.id === id),
+
+      // Filters & Sorting
+      filterTier: 'all',
+      setFilterTier: (tier) => set({ filterTier: tier }),
+      sortBy: 'predictedCutoff',
+      setSortBy: (sort) => set({ sortBy: sort }),
     }),
     {
       name: 'kcet-planner-store',
@@ -77,6 +89,8 @@ export const useAppStore = create<AppState>()(
         studentInput: state.studentInput,
         predictions: state.predictions,
         shortlist: state.shortlist,
+        filterTier: state.filterTier,
+        sortBy: state.sortBy,
       }),
     }
   )

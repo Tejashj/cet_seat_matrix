@@ -6,7 +6,8 @@
 
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getFirestore, Firestore } from 'firebase/firestore';
-import { getAnalytics, Analytics } from 'firebase/analytics';
+import { getStorage, FirebaseStorage } from 'firebase/storage';
+import { getAuth, Auth } from 'firebase/auth';
 
 // ── REPLACE WITH YOUR FIREBASE CONFIG ──────────────────────────────
 const firebaseConfig = {
@@ -22,6 +23,8 @@ const firebaseConfig = {
 
 let app: FirebaseApp;
 let db: Firestore;
+let storage: FirebaseStorage;
+let auth: Auth;
 
 export function getFirebaseApp(): FirebaseApp {
   if (!app) {
@@ -35,6 +38,20 @@ export function getFirestoreDB(): Firestore {
     db = getFirestore(getFirebaseApp());
   }
   return db;
+}
+
+export function getFirebaseStorage(): FirebaseStorage {
+  if (!storage) {
+    storage = getStorage(getFirebaseApp());
+  }
+  return storage;
+}
+
+export function getFirebaseAuth(): Auth {
+  if (!auth) {
+    auth = getAuth(getFirebaseApp());
+  }
+  return auth;
 }
 
 export const isFirebaseConfigured = (): boolean => {

@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if the request is from an authenticated admin
+    function isAdmin() {
+      return request.auth != null;
+    }
+
+    // PDF rules
+    match /pdfs/{year} {
+      // Anyone can view the PDFs list and search
+      allow read: if true;
+      // Anyone can increment the download count
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['downloadCount']) 
+                    && request.resource.data.downloadCount == resource.data.downloadCount + 1;
+      // Only authenticated admins can write (create, delete, full update)
+      allow write: if isAdmin();
+    }
+
+    // Feedback rules
+    match /feedback/{feedbackId} {
+      // Anyone can submit feedback (write/create)
+      allow create: if true;
+      // Admins can read, update, or delete feedback entries
+      allow read, update, delete: if isAdmin();
+    }
+    
+    // Accuracy reports
+    match /accuracy_reports/{reportId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+    
+    // Feature requests
+    match /feature_requests/{requestId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}
